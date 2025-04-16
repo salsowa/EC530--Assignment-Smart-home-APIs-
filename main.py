@@ -2,12 +2,16 @@ from fastapi import FastAPI, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
 import uuid
+import redis  #  Redis added
 
 app = FastAPI()
 
-# Data storage (in-memory)
+# In-memory storage
 houses = {}
 users = {}
+
+# Redis client setup
+redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
 # Models
 class Metadata(BaseModel):
@@ -43,8 +47,8 @@ class User(BaseModel):
     name: str
     email: str
 
+# --- USER ENDPOINTS ---
 
-# User Endpoints
 @app.post("/users/")
 def create_user(user: User):
     user.id = str(uuid.uuid4())
@@ -74,8 +78,8 @@ def delete_user(user_id: str):
     del users[user_id]
     return {"message": f"User {user_id} deleted successfully"}
 
+# --- HOUSE ENDPOINTS ---
 
-# House Endpoints
 @app.post("/houses/")
 def create_house(house: House):
     house.id = str(uuid.uuid4())
@@ -103,8 +107,8 @@ def delete_house(house_id: str):
     del houses[house_id]
     return {"message": f"House {house_id} deleted successfully"}
 
+# --- FLOOR ENDPOINTS ---
 
-# Floor Endpoints
 @app.post("/houses/{house_id}/floors/")
 def add_floor(house_id: str, floor: Floor):
     if house_id not in houses:
@@ -119,8 +123,8 @@ def delete_floor(house_id: str, floor_id: str):
     house.floors = [floor for floor in house.floors if floor.id != floor_id]
     return {"message": f"Floor {floor_id} deleted"}
 
+# --- ROOM ENDPOINTS ---
 
-# Room Endpoints
 @app.post("/houses/{house_id}/floors/{floor_id}/rooms/")
 def add_room(house_id: str, floor_id: str, room: Room):
     house = houses.get(house_id)
@@ -136,8 +140,8 @@ def delete_room(house_id: str, floor_id: str, room_id: str):
     floor.rooms = [room for room in floor.rooms if room.id != room_id]
     return {"message": f"Room {room_id} deleted"}
 
+# --- DEVICE ENDPOINTS ---
 
-# Device Endpoints
 @app.post("/houses/{house_id}/floors/{floor_id}/rooms/{room_id}/devices/")
 def add_device(house_id: str, floor_id: str, room_id: str, device: Device):
     house = houses.get(house_id)
@@ -145,10 +149,23 @@ def add_device(house_id: str, floor_id: str, room_id: str, device: Device):
     room = next((r for r in floor.rooms if r.id == room_id), None)
     device.id = str(uuid.uuid4())
     room.devices.append(device)
+
+    # Store latest device data in Redis
+    redis_client.set(f"device:{device.id}:latest_data", str(device.data))
+
     return device
 
+# --- REDIS: GET LATEST DEVICE DATA ---
 
-# Run the server locally
+@app.get("/devices/{device_id}/latest/")
+def get_latest_device_data(device_id: str):
+    data = redis_client.get(f"device:{device_id}:latest_data")
+    if not data:
+        raise HTTPException(status_code=404, detail="No cached data found for this device")
+    return {"device_id": device_id, "latest_data": data, "source": "redis"}
+
+# --- RUN LOCALLY ---
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
